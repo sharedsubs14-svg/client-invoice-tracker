@@ -37,7 +37,7 @@ const Icon = {
   alert: () => svg(html`<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>`, 18),
   chevron: () => svg(html`<path d="m9 18 6-6-6-6"/>`, 18),
   download: () => svg(html`<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>`, 18),
-  sheet: () => svg(html`<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>`, 18),
+  lock: () => svg(html`<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>`, 18),
 }
 
 // ---------- hooks ----------
@@ -544,7 +544,6 @@ async function exportExcel(entries) {
 
 function DoneTab({ entries, fy, open, today }) {
   const [showLost, setShowLost] = useState(false)
-  const sheetUrl = store.getState().settings.sheetUrl
   const sum = useMemo(() => {
     let received = 0, invoiced = 0, gst = 0, tds = 0, vendor = 0, margin = 0, jobs = 0
     for (const e of entries) {
@@ -570,7 +569,6 @@ function DoneTab({ entries, fy, open, today }) {
       <div class="stat"><span>Your margin</span><strong>${fmt0(sum.margin)}</strong></div>
     </div>
     <div class="done-tools">
-      ${sheetUrl && html`<a class="btn ghost grow" href=${sheetUrl} target="_blank" rel="noopener">${Icon.sheet()} Google Sheet</a>`}
       <button class="btn ghost grow" onClick=${() => exportExcel(entries)}>${Icon.download()} Excel</button>
     </div>
 
@@ -913,7 +911,6 @@ function SettingsSheet({ close, back, open }) {
       ...f, categories,
       paymentTermsDays: num(f.paymentTermsDays) || 30, gstRate: num(f.gstRate), tdsRate: num(f.tdsRate), advancePct: num(f.advancePct),
       invoicePrefix: (f.invoicePrefix || 'INV').trim(),
-      sheetUrl: (f.sheetUrl || '').trim(),
     })
     toast('Settings saved')
     back ? open(back.type, { id: back.id }) : close()
@@ -936,6 +933,16 @@ function SettingsSheet({ close, back, open }) {
       alert('Import failed: ' + err.message)
     }
     ev.target.value = ''
+  }
+  const signOut = async () => {
+    const n = store.pendingCount()
+    const msg = n
+      ? `${plural(n, 'change')} hasn't synced yet and will be lost if you sign out now. Sign out anyway?`
+      : 'Sign out? Your data will be removed from this device (it stays safe, encrypted, in your account).'
+    if (confirm(msg)) {
+      await store.signOut()
+      close()
+    }
   }
   const b = f.business, k = f.bank
   return html`<${Sheet} title="Settings" onClose=${close} footer=${html`<button class="btn primary block" onClick=${save}>Save settings</button>`}>
@@ -977,9 +984,6 @@ function SettingsSheet({ close, back, open }) {
       <//>
 
       <h3 class="sub">Data</h3>
-      <${Field} label="Google Sheet link" hint="Paste the URL of the sheet Supabase syncs to. It shows as a button on the Done tab.">
-        <input type="url" value=${f.sheetUrl} onInput=${set('sheetUrl')} placeholder="https://docs.google.com/spreadsheets/d/…" />
-      <//>
       <div class="btn-row">
         <button type="button" class="btn ghost grow" onClick=${() => exportExcel(s.entries)}>Excel</button>
         <button type="button" class="btn ghost grow" onClick=${exportData}>Export backup</button>
@@ -987,8 +991,15 @@ function SettingsSheet({ close, back, open }) {
         <input ref=${fileRef} type="file" accept="application/json,.json" hidden onChange=${importData} />
       </div>
       ${s.mode === 'cloud'
-        ? html`<div class="account"><span>Signed in as <strong>${s.user?.email}</strong></span>
-            <button type="button" class="btn ghost danger" onClick=${async () => { if (confirm('Sign out?')) { await store.signOut(); close() } }}>Sign out</button></div>`
+        ? html`
+          <h3 class="sub">Privacy & security</h3>
+          <div class="notice ok">${Icon.lock()}<span><strong>End-to-end encrypted.</strong> Your jobs and settings are locked with your password on this device before they're uploaded. Nobody else — not even whoever runs the server — can read them.</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost grow" onClick=${() => open('security', { action: 'password' })}>Change password</button>
+            <button type="button" class="btn ghost grow" onClick=${() => open('security', { action: 'recovery' })}>New recovery code</button>
+          </div>
+          <div class="account"><span>Signed in as <strong>${s.user?.email}</strong></span>
+            <button type="button" class="btn ghost danger" onClick=${signOut}>Sign out</button></div>`
         : html`<p class="hint">Data is saved on this device only. Add your Supabase keys to <code>config.js</code> to sync and back up to the cloud.</p>`}
     </form>
   <//>`
@@ -1009,48 +1020,185 @@ function SheetRouter({ sheet, open, close }) {
     case 'invoiceReady': return html`<${InvoiceReady} ...${p} />`
     case 'payment': return html`<${PaymentSheet} ...${p} />`
     case 'settings': return html`<${SettingsSheet} ...${p} />`
+    case 'security': return html`<${SecuritySheet} ...${p} />`
   }
   return null
 }
 
-// ---------- login ----------
-function Login() {
-  const [mode, setMode] = useState('signin')
-  const [email, setEmail] = useState(localStorage.getItem('cit:lastEmail') || '')
-  const [pw, setPw] = useState('')
+// ---------- security (change password / new recovery code) ----------
+function SecuritySheet({ action, close, open }) {
+  const isPw = action === 'password'
+  const [cur, setCur] = useState('')
+  const [next, setNext] = useState('')
   const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState(null)
+  const [err, setErr] = useState(null)
+  const back = () => open('settings')
   const submit = async (ev) => {
     ev.preventDefault()
+    setErr(null)
+    if (isPw && next.length < 8) return setErr('Use at least 8 characters.')
+    setBusy(true)
+    try {
+      if (isPw) {
+        await store.changePassword(cur, next)
+        toast('Password changed')
+      } else await store.newRecoveryCode(cur)
+      back()
+    } catch (e) {
+      setErr(e.message || String(e))
+    }
+    setBusy(false)
+  }
+  return html`<${Sheet} title=${isPw ? 'Change password' : 'New recovery code'} onClose=${back}>
+    <form class="form" onSubmit=${submit}>
+      ${!isPw && html`<p class="hint">Your old recovery code will stop working. You'll see the new one once — save it somewhere safe.</p>`}
+      <${Field} label="Current password"><input type="password" autocomplete="current-password" value=${cur} onInput=${(ev) => setCur(ev.target.value)} required /><//>
+      ${isPw && html`<${Field} label="New password" hint="At least 8 characters."><input type="password" autocomplete="new-password" value=${next} onInput=${(ev) => setNext(ev.target.value)} required /><//>`}
+      ${err && html`<div class="notice warn"><span>${err}</span></div>`}
+      <button class="btn primary block" disabled=${busy}>${busy ? 'Please wait…' : isPw ? 'Change password' : 'Create new code'}</button>
+    </form>
+  <//>`
+}
+
+// ---------- recovery code (shown once) ----------
+function RecoveryCodeModal({ code }) {
+  const [saved, setSaved] = useState(false)
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      toast('Copied')
+    } catch {
+      toast('Copy failed — write it down instead')
+    }
+  }
+  const download = () =>
+    downloadFile(new File([`Invoice Tracker recovery code\n\n${code}\n\nKeep this safe. It's the only way to open your data if you forget your password.\n`], 'invoice-tracker-recovery-code.txt', { type: 'text/plain' }))
+  return html`<div class="sheet-wrap">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Your recovery code">
+      <div class="sheet-head"><h2>Save your recovery code</h2></div>
+      <div class="sheet-body form">
+        <p>Your data is encrypted with your password, so <strong>nobody can reset it for you</strong> — not even the app's owner. If you forget your password, this code is the only way back in.</p>
+        <div class="recovery-code" aria-label="Recovery code">${code}</div>
+        <div class="btn-row">
+          <button type="button" class="btn ghost grow" onClick=${copy}>Copy</button>
+          <button type="button" class="btn ghost grow" onClick=${download}>${Icon.download()} Download</button>
+        </div>
+        <${Toggle} checked=${saved} onChange=${setSaved} label="I've saved it somewhere safe" sub="e.g. your password manager or a note offline" />
+        <button class="btn primary block" disabled=${!saved} onClick=${() => store.ackRecoveryCode()}>Continue</button>
+      </div>
+    </div>
+  </div>`
+}
+
+// ---------- login / unlock / reset ----------
+const AuthCard = ({ title, sub, children }) => html`<div class="login">
+  <div class="login-card glass">
+    <img src="icons/icon-192.png" alt="" width="64" height="64" />
+    <h1>${title}</h1>
+    <p class="muted">${sub}</p>
+    ${children}
+  </div>
+</div>`
+
+const Msg = ({ msg }) => msg && html`<div class="notice ${msg.ok ? 'ok' : 'warn'}"><span>${msg.text}</span></div>`
+
+function useBusy() {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const run = async (fn) => {
     setBusy(true)
     setMsg(null)
     try {
-      if (mode === 'signin') await store.signIn(email.trim(), pw)
-      else {
-        const { needsConfirm } = await store.signUp(email.trim(), pw)
-        if (needsConfirm) setMsg({ ok: true, text: 'Account created. Check your email to confirm, then sign in.' })
-      }
+      await fn()
     } catch (err) {
       setMsg({ ok: false, text: err.message || String(err) })
     }
     setBusy(false)
   }
-  return html`<div class="login">
-    <div class="login-card glass">
-      <img src="icons/icon-192.png" alt="" width="64" height="64" />
-      <h1>Invoice Tracker</h1>
-      <p class="muted">Quotes → advance → work → invoice → paid.</p>
-      <form class="form" onSubmit=${submit}>
-        <${Field} label="Email"><input type="email" autocomplete="email" value=${email} onInput=${(ev) => setEmail(ev.target.value)} required /><//>
-        <${Field} label="Password"><input type="password" autocomplete=${mode === 'signin' ? 'current-password' : 'new-password'} minlength="6" value=${pw} onInput=${(ev) => setPw(ev.target.value)} required /><//>
-        ${msg && html`<div class="notice ${msg.ok ? 'ok' : 'warn'}"><span>${msg.text}</span></div>`}
-        <button class="btn primary block" disabled=${busy}>${busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Create account'}</button>
-      </form>
-      <button class="link-btn" onClick=${() => (setMode(mode === 'signin' ? 'signup' : 'signin'), setMsg(null))}>
-        ${mode === 'signin' ? 'First time? Create your account' : 'Have an account? Sign in'}
+  return { busy, msg, setMsg, run }
+}
+
+function Login() {
+  const [mode, setMode] = useState('signin') // signin | signup | forgot
+  const [email, setEmail] = useState(localStorage.getItem('cit:lastEmail') || '')
+  const [pw, setPw] = useState('')
+  const { busy, msg, setMsg, run } = useBusy()
+  const go = (m) => (setMode(m), setMsg(null))
+  const submit = (ev) => {
+    ev.preventDefault()
+    run(async () => {
+      const em = email.trim()
+      if (mode === 'signin') await store.signIn(em, pw)
+      else if (mode === 'forgot') {
+        await store.forgotPassword(em)
+        setMsg({ ok: true, text: 'Check your email for a reset link. Open it on this device; you’ll need your recovery code.' })
+      } else {
+        if (pw.length < 8) throw new Error('Use at least 8 characters.')
+        const { needsConfirm } = await store.signUp(em, pw)
+        if (needsConfirm) setMsg({ ok: true, text: 'Account created. Check your email to confirm, then sign in.' })
+      }
+    })
+  }
+  const label = { signin: 'Sign in', signup: 'Create account', forgot: 'Send reset link' }[mode]
+  return html`<${AuthCard} title="Invoice Tracker" sub="Quotes → advance → work → invoice → paid.">
+    <form class="form" onSubmit=${submit}>
+      <${Field} label="Email"><input type="email" autocomplete="email" value=${email} onInput=${(ev) => setEmail(ev.target.value)} required /><//>
+      ${mode !== 'forgot' && html`<${Field} label="Password" hint=${mode === 'signup' ? 'At least 8 characters. It also encrypts your data, so pick one you’ll remember.' : null}>
+        <input type="password" autocomplete=${mode === 'signin' ? 'current-password' : 'new-password'} minlength=${mode === 'signup' ? 8 : 6} value=${pw} onInput=${(ev) => setPw(ev.target.value)} required />
+      <//>`}
+      <${Msg} msg=${msg} />
+      <button class="btn primary block" disabled=${busy}>${busy ? 'Please wait…' : label}</button>
+    </form>
+    ${mode === 'signin' && html`<button class="link-btn" onClick=${() => go('forgot')}>Forgot password?</button>`}
+    <button class="link-btn" onClick=${() => go(mode === 'signin' ? 'signup' : 'signin')}>
+      ${mode === 'signin' ? 'New here? Create an account' : 'Have an account? Sign in'}
+    </button>
+    <p class="e2e-note">${Icon.lock()} End-to-end encrypted. Only you can read your data.</p>
+  <//>`
+}
+
+// Signed in, but this device doesn't have the key (new device, or after a password reset).
+// recovering = arrived from the reset email: also sets the new login password.
+function Unlock({ recovering }) {
+  const s = store.getState()
+  const [view, setView] = useState(recovering ? 'recovery' : 'password') // password | recovery | startOver
+  const [pw, setPw] = useState('')
+  const [code, setCode] = useState('')
+  const { busy, msg, setMsg, run } = useBusy()
+  const go = (v) => (setView(v), setMsg(null))
+  const submit = (ev) => {
+    ev.preventDefault()
+    run(async () => {
+      if (recovering && pw.length < 8) throw new Error('Use at least 8 characters.')
+      if (view === 'password') await store.unlock(pw)
+      else if (view === 'recovery') await store.recover(code, pw)
+      else {
+        if (!confirm('Delete all your saved jobs and settings and start with an empty account? This can’t be undone.')) return
+        await store.startOver(pw)
+      }
+    })
+  }
+  const pwLabel = recovering ? 'New password' : view === 'password' ? 'Password' : 'Your login password'
+  return html`<${AuthCard} title=${recovering ? 'Reset password' : 'Unlock your data'} sub=${s.user?.email || ''}>
+    ${view === 'password' && s.unlockError && !msg && html`<${Msg} msg=${{ ok: false, text: s.unlockError }} />`}
+    <form class="form" onSubmit=${submit}>
+      ${view === 'password' && html`<p class="hint">Enter your password to decrypt your data on this device.</p>`}
+      ${view === 'recovery' && html`<p class="hint">Enter the recovery code you saved when you created your account.</p>
+        <${Field} label="Recovery code"><input value=${code} onInput=${(ev) => setCode(ev.target.value)} placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" autocomplete="off" spellcheck="false" required /><//>`}
+      ${view === 'startOver' && html`<div class="notice warn">${Icon.alert()}<span>Without your old password or recovery code, your saved data can't be decrypted by anyone. Starting over deletes it and gives you an empty account.</span></div>`}
+      <${Field} label=${pwLabel} hint=${recovering ? 'At least 8 characters.' : null}>
+        <input type="password" autocomplete=${recovering ? 'new-password' : 'current-password'} value=${pw} onInput=${(ev) => setPw(ev.target.value)} required />
+      <//>
+      <${Msg} msg=${msg} />
+      <button class="btn primary block ${view === 'startOver' ? 'danger' : ''}" disabled=${busy}>
+        ${busy ? 'Please wait…' : view === 'startOver' ? 'Delete data and start over' : recovering ? 'Reset password' : 'Unlock'}
       </button>
-    </div>
-  </div>`
+    </form>
+    ${view !== 'recovery' && html`<button class="link-btn" onClick=${() => go('recovery')}>Use recovery code</button>`}
+    ${view === 'recovery' && !recovering && html`<button class="link-btn" onClick=${() => go('password')}>Use password</button>`}
+    ${view !== 'startOver' && html`<button class="link-btn" onClick=${() => go('startOver')}>Lost the recovery code too?</button>`}
+    <button class="link-btn" onClick=${() => store.signOut()}>Sign out</button>
+  <//>`
 }
 
 // ---------- app ----------
@@ -1073,6 +1221,7 @@ function App() {
 
   if (!s.ready) return html`<div class="splash"><img src="icons/icon-192.png" alt="" width="72" height="72" /></div>`
   if (s.mode === 'cloud' && !s.user) return html`<${Login} /><${Toaster} />`
+  if (s.mode === 'cloud' && s.locked) return html`<${Unlock} key=${String(s.recovering)} recovering=${s.recovering} /><${Toaster} />`
 
   const { entries } = s
   const badge = {
@@ -1103,10 +1252,12 @@ function App() {
       <button class="fab" onClick=${() => open('new')} aria-label="New quote">${Icon.plus()}</button>
       ${nav(TABS[2])}${nav(TABS[3])}
     </nav>
-    ${sheet && html`<${SheetRouter} key=${sheet.type + (sheet.id || '')} sheet=${sheet} open=${open} close=${close} />`}
+    ${sheet && html`<${SheetRouter} key=${sheet.type + (sheet.id || '') + (sheet.action || '')} sheet=${sheet} open=${open} close=${close} />`}
+    ${s.recoveryCode && html`<${RecoveryCodeModal} code=${s.recoveryCode} />`}
     <${Toaster} />
   </div>`
 }
 
 store.init()
 render(html`<${App} />`, document.getElementById('app'))
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js'))

@@ -540,3 +540,13 @@ input.money { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-n
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- encryption ---------- */
+.btn.primary.danger { background: var(--red); color: #fff; box-shadow: none; }
+.recovery-code {
+  font: 600 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em; text-align: center; white-space: nowrap; overflow-x: auto;
+  padding: 16px 10px; border-radius: 14px; background: var(--blue-soft, #eef3ff); color: var(--ink);
+  user-select: all;
+}
+.e2e-note { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 14px; font-size: 13px; color: var(--muted); }

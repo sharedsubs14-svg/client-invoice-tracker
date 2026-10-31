@@ -3,13 +3,14 @@
 // CDN libraries: cache-first (their URLs are version-pinned, so they never change).
 // Supabase API calls are never cached.
 
-const CACHE = 'cit-v3'
+const CACHE = 'cit-v4'
 const SHELL = [
   './',
   'index.html',
   'css/app.css',
   'js/app.js',
   'js/store.js',
+  'js/crypto.js',
   'js/calc.js',
   'js/invoice.js',
   'js/excel.js',
