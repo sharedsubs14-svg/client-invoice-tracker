@@ -3,7 +3,7 @@
 // CDN libraries: cache-first (their URLs are version-pinned, so they never change).
 // Supabase API calls are never cached.
 
-const CACHE = 'cit-v1'
+const CACHE = 'cit-v2'
 const SHELL = [
   './',
   'index.html',
@@ -12,6 +12,7 @@ const SHELL = [
   'js/store.js',
   'js/calc.js',
   'js/invoice.js',
+  'js/excel.js',
   'config.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
@@ -20,6 +21,7 @@ const SHELL = [
 const CDN = [
   'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js',
   'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
 ]
 
 self.addEventListener('install', (event) => {

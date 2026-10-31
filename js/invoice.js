@@ -64,7 +64,7 @@ export async function buildInvoicePdf(entry, settings) {
 
   // Header
   text(biz.name || 'Your Business Name', M, y, { bold: true, size: 18 })
-  text(biz.gstin ? 'TAX INVOICE' : 'INVOICE', R, y, { bold: true, size: 13, align: 'right', color: [230, 90, 50] })
+  text(biz.gstin ? 'TAX INVOICE' : 'INVOICE', R, y, { bold: true, size: 13, align: 'right', color: [23, 70, 216] })
   y += 6
   let ly = wrap(biz.address, M, y, 100, { size: 9, color: grey })
   const contact = [biz.phone, biz.email].filter(Boolean).join('  ·  ')
@@ -100,7 +100,7 @@ export async function buildInvoicePdf(entry, settings) {
   y += 5
 
   // Line item table
-  doc.setFillColor(245, 244, 241)
+  doc.setFillColor(236, 242, 255)
   doc.rect(M, y - 4.5, R - M, 8, 'F')
   text('#', M + 2, y, { size: 9, bold: true })
   text('Description', M + 10, y, { size: 9, bold: true })
@@ -132,7 +132,7 @@ export async function buildInvoicePdf(entry, settings) {
     text(v, R - 2, y, { size: 10, align: 'right' })
     y += 6
   }
-  doc.setFillColor(20, 20, 20)
+  doc.setFillColor(23, 70, 216)
   doc.rect(tx - 3, y - 4.5, R - tx + 3, 9, 'F')
   text('Invoice Total', tx, y + 1, { size: 11, bold: true, color: [255, 255, 255] })
   text(rs(c.total), R - 2, y + 1, { size: 11, bold: true, align: 'right', color: [255, 255, 255] })

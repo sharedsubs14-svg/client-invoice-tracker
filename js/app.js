@@ -2,6 +2,7 @@ import { html, render, useState, useEffect, useLayoutEffect, useMemo, useRef } f
 import * as store from './store.js'
 import { calc, num, round2, fmt, fmt0, fmtCompact, todayISO, addDays, daysBetween, fmtDate, fmtDateShort, fyOf, fyLabel, inFY, nextInvoiceNumber } from './calc.js'
 import { buildInvoicePdf, shareFile, downloadFile } from './invoice.js'
+import { buildWorkbook } from './excel.js'
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2))
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
@@ -35,6 +36,7 @@ const Icon = {
   file: () => svg(html`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>`, 18),
   alert: () => svg(html`<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>`, 18),
   chevron: () => svg(html`<path d="m9 18 6-6-6-6"/>`, 18),
+  sheet: () => svg(html`<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>`, 18),
 }
 
 // ---------- hooks ----------
@@ -375,7 +377,171 @@ function DueTab({ entries, today, open }) {
   </section>`
 }
 
-function DoneTab({ entries, fy, open }) {
+// ---------- charts (plain HTML/CSS so they stay crisp and responsive) ----------
+const FY_MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
+const fyMonthIndex = (iso) => (Number(iso.slice(5, 7)) + 8) % 12
+const WON = ['wip', 'done', 'invoiced', 'paid']
+const jobDate = (e) => e.wipAt || e.quotedAt || ''
+
+function fmtAxis(n) {
+  if (n >= 1e7) return `₹${+(n / 1e7).toFixed(1)}Cr`
+  if (n >= 1e5) return `₹${+(n / 1e5).toFixed(1)}L`
+  if (n >= 1e3) return `₹${+(n / 1e3).toFixed(0)}K`
+  return `₹${n}`
+}
+function niceMax(v) {
+  if (v <= 0) return 1
+  const p = 10 ** Math.floor(Math.log10(v))
+  const n = v / p
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p
+}
+
+function analytics(entries, fy, today) {
+  const received = Array(12).fill(0)
+  const invoiced = Array(12).fill(0)
+  const clients = new Map()
+  const cats = new Map()
+  const allTimeJobs = new Map()
+  let quotes = 0, won = 0, lost = 0, invoicedJobs = 0, paidJobs = 0, paidDays = 0, paidCount = 0, wonValue = 0
+  for (const e of entries) {
+    const c = calc(e)
+    for (const p of e.payments || []) if (inFY(p.date, fy)) received[fyMonthIndex(p.date)] += num(p.amount)
+    if (e.invoice?.date && inFY(e.invoice.date, fy)) invoiced[fyMonthIndex(e.invoice.date)] += c.total
+    if (WON.includes(e.status)) allTimeJobs.set(e.client, (allTimeJobs.get(e.client) || 0) + 1)
+    if (inFY(e.quotedAt, fy)) {
+      quotes++
+      if (WON.includes(e.status)) won++
+      if (e.status === 'lost') lost++
+      if (e.invoice) invoicedJobs++
+      if (e.status === 'paid') paidJobs++
+    }
+    if (WON.includes(e.status) && inFY(jobDate(e), fy)) {
+      const cl = clients.get(e.client) || { name: e.client, value: 0, jobs: 0 }
+      cl.value += c.base
+      cl.jobs++
+      clients.set(e.client, cl)
+      const cat = e.category || 'Other'
+      cats.set(cat, (cats.get(cat) || 0) + c.base)
+      wonValue += c.base
+    }
+    if (e.status === 'paid' && inFY(e.paidAt, fy) && e.invoice?.date) {
+      paidDays += Math.max(0, daysBetween(e.invoice.date, e.paidAt))
+      paidCount++
+    }
+  }
+  const clientList = [...clients.values()].map((c) => ({ ...c, repeat: (allTimeJobs.get(c.name) || 0) >= 2 })).sort((a, b) => b.value - a.value)
+  const repeatValue = clientList.filter((c) => c.repeat).reduce((s, c) => s + c.value, 0)
+  const curMonth = inFY(today, fy) ? fyMonthIndex(today) : 11
+  return {
+    received, invoiced, curMonth,
+    clients: clientList,
+    repeatCount: clientList.filter((c) => c.repeat).length,
+    repeatShare: wonValue ? Math.round((repeatValue / wonValue) * 100) : 0,
+    cats: [...cats.entries()].map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value),
+    funnel: { quotes, won, invoicedJobs, paidJobs },
+    winRate: won + lost ? Math.round((won / (won + lost)) * 100) : null,
+    avgDaysToPay: paidCount ? Math.round(paidDays / paidCount) : null,
+    avgJob: won ? wonValue / won : 0,
+    wonValue,
+  }
+}
+
+function ColumnChart({ values, labels, upto }) {
+  const [sel, setSel] = useState(null)
+  const max = niceMax(Math.max(...values))
+  let peak = -1
+  values.forEach((v, i) => { if (v > 0 && (peak < 0 || v > values[peak])) peak = i })
+  const show = sel ?? peak
+  return html`<div class="colchart">
+    <div class="cc-plot">
+      ${[0, 0.5, 1].map((t) => html`<div class="cc-grid" key=${t} style=${`bottom:${t * 100}%`}><span>${fmtAxis(max * t)}</span></div>`)}
+      <div class="cc-bars">
+        ${values.map((v, i) => {
+          const h = (v / max) * 100
+          return html`<button key=${i} class="cc-col ${sel === i ? 'sel' : ''} ${v ? '' : 'empty-val'}" style=${`--h:${h}%;${i > upto ? 'opacity:.45' : ''}`}
+              onClick=${() => setSel(sel === i ? null : i)} aria-label=${`${labels[i]}: ${fmt0(v)}`} title=${`${labels[i]}: ${fmt0(v)}`}>
+            ${show === i && html`<span class="cc-tip">${fmtCompact(v)}</span>`}
+            <span class="cc-bar" style=${`height:${h}%`}></span>
+          </button>`
+        })}
+      </div>
+    </div>
+    <div class="cc-x">${labels.map((l, i) => html`<span key=${i}>${l}</span>`)}</div>
+  </div>`
+}
+
+function BarList({ rows, empty }) {
+  if (!rows.length) return html`<p class="chart-empty">${empty}</p>`
+  const max = Math.max(...rows.map((r) => r.value)) || 1
+  return html`<div class="barlist">
+    ${rows.map((r) => html`<div key=${r.label}>
+      <div class="bl-head"><span class="bl-label">${r.label}${r.tag && html`<span class="tag">${r.tag}</span>`}</span><span class="bl-val">${fmtCompact(r.value)}</span></div>
+      <div class="bl-track"><span style=${`width:${Math.max(2, (r.value / max) * 100)}%`}></span></div>
+      ${r.sub && html`<span class="bl-sub">${r.sub}</span>`}
+    </div>`)}
+  </div>`
+}
+
+function Insights({ entries, fy, today }) {
+  const [series, setSeries] = useState('received')
+  const a = useMemo(() => analytics(entries, fy, today), [entries, fy, today])
+  const values = series === 'received' ? a.received : a.invoiced
+  const total = values.reduce((s, v) => s + v, 0)
+  const top = a.clients.slice(0, 6)
+  const f = a.funnel
+  return html`
+    <div class="chart-card">
+      <div class="chart-head">
+        <div><h3>${series === 'received' ? 'Received' : 'Invoiced'} by month</h3><p>${fmt0(total)} in ${fyLabel(fy)} · tap a bar</p></div>
+        <div class="seg">
+          <button class=${series === 'received' ? 'on' : ''} onClick=${() => setSeries('received')}>Received</button>
+          <button class=${series === 'invoiced' ? 'on' : ''} onClick=${() => setSeries('invoiced')}>Invoiced</button>
+        </div>
+      </div>
+      <${ColumnChart} values=${values} labels=${FY_MONTHS} upto=${a.curMonth} />
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat"><span>Win rate</span><strong>${a.winRate == null ? '—' : a.winRate + '%'}</strong><em>quotes won vs lost</em></div>
+      <div class="stat"><span>Avg. days to get paid</span><strong>${a.avgDaysToPay == null ? '—' : a.avgDaysToPay}</strong><em>invoice → final payment</em></div>
+      <div class="stat"><span>Avg. job value</span><strong>${fmt0(a.avgJob)}</strong><em>excl. GST</em></div>
+      <div class="stat"><span>Repeat clients</span><strong>${a.repeatCount}</strong><em>${a.repeatShare}% of work value</em></div>
+    </div>
+
+    <div class="chart-card" style="margin-top:12px">
+      <div class="chart-head"><div><h3>Top clients</h3><p>Work value excl. GST · ${plural(a.clients.length, 'client')} this year</p></div></div>
+      <${BarList} empty="Clients show up here once work starts."
+        rows=${top.map((c) => ({ label: c.name, value: c.value, tag: c.repeat ? 'Repeat' : '', sub: plural(c.jobs, 'job') + ' this year' }))} />
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-head"><div><h3>Work by category</h3><p>Share of work value excl. GST</p></div></div>
+      <${BarList} empty="No work started this year yet."
+        rows=${a.cats.slice(0, 6).map((c) => ({ label: c.name, value: c.value, sub: a.wonValue ? `${Math.round((c.value / a.wonValue) * 100)}%` : '' }))} />
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-head"><div><h3>Pipeline</h3><p>Quotes sent this year and how far they got</p></div></div>
+      <div class="funnel">
+        <div style="--a:.06"><strong>${f.quotes}</strong><span>Quoted</span></div>
+        <div style="--a:.12"><strong>${f.won}</strong><span>Won</span></div>
+        <div style="--a:.18"><strong>${f.invoicedJobs}</strong><span>Invoiced</span></div>
+        <div style="--a:.26"><strong>${f.paidJobs}</strong><span>Paid</span></div>
+      </div>
+    </div>`
+}
+
+async function exportExcel(entries) {
+  try {
+    toast('Preparing Excel file…')
+    const file = await buildWorkbook(entries)
+    await shareFile(file, 'Invoice tracker')
+  } catch (err) {
+    toast(err.message || String(err))
+  }
+}
+
+function DoneTab({ entries, fy, open, today }) {
   const [showLost, setShowLost] = useState(false)
   const sum = useMemo(() => {
     let received = 0, invoiced = 0, gst = 0, tds = 0, vendor = 0, margin = 0, jobs = 0
@@ -395,13 +561,18 @@ function DoneTab({ entries, fy, open }) {
   return html`<section>
     <div class="sec-head"><h2>${fyLabel(fy)}</h2><span>${plural(sum.jobs, 'job')} invoiced</span></div>
     <div class="stat-grid">
-      <div class="stat"><span>Received</span><strong>${fmt0(sum.received)}</strong></div>
-      <div class="stat"><span>Invoiced</span><strong>${fmt0(sum.invoiced)}</strong></div>
+      <div class="stat hero"><span>Received this year</span><strong>${fmt0(sum.received)}</strong><em>of ${fmt0(sum.invoiced)} invoiced</em></div>
       <div class="stat"><span>GST collected</span><strong>${fmt0(sum.gst)}</strong></div>
       <div class="stat"><span>TDS deducted</span><strong>${fmt0(sum.tds)}</strong></div>
       <div class="stat"><span>Vendor costs</span><strong>${fmt0(sum.vendor)}</strong></div>
       <div class="stat"><span>Your margin</span><strong>${fmt0(sum.margin)}</strong></div>
     </div>
+    <div class="done-tools">
+      <button class="btn ghost grow" onClick=${() => exportExcel(entries)}>${Icon.sheet()} Download Excel</button>
+    </div>
+
+    <div class="sec-head"><h2>Insights</h2><span>${fyLabel(fy)}</span></div>
+    <${Insights} entries=${entries} fy=${fy} today=${today} />
 
     ${vendorsDue.length > 0 && html`
       <div class="sec-head"><h2>Vendors to pay</h2><span>${fmt0(vendorsDue.reduce((s, e) => s + num(e.vendorCost), 0))}</span></div>
@@ -803,6 +974,7 @@ function SettingsSheet({ close, back, open }) {
 
       <h3 class="sub">Data</h3>
       <div class="btn-row">
+        <button type="button" class="btn ghost grow" onClick=${() => exportExcel(s.entries)}>Excel</button>
         <button type="button" class="btn ghost grow" onClick=${exportData}>Export backup</button>
         <button type="button" class="btn ghost grow" onClick=${() => fileRef.current.click()}>Import backup</button>
         <input ref=${fileRef} type="file" accept="application/json,.json" hidden onChange=${importData} />
@@ -857,7 +1029,7 @@ function Login() {
     setBusy(false)
   }
   return html`<div class="login">
-    <div class="login-card">
+    <div class="login-card glass">
       <img src="icons/icon-192.png" alt="" width="64" height="64" />
       <h1>Invoice Tracker</h1>
       <p class="muted">Quotes → advance → work → invoice → paid.</p>
