@@ -36,6 +36,7 @@ const Icon = {
   file: () => svg(html`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>`, 18),
   alert: () => svg(html`<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>`, 18),
   chevron: () => svg(html`<path d="m9 18 6-6-6-6"/>`, 18),
+  download: () => svg(html`<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>`, 18),
   sheet: () => svg(html`<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/>`, 18),
 }
 
@@ -543,6 +544,7 @@ async function exportExcel(entries) {
 
 function DoneTab({ entries, fy, open, today }) {
   const [showLost, setShowLost] = useState(false)
+  const sheetUrl = store.getState().settings.sheetUrl
   const sum = useMemo(() => {
     let received = 0, invoiced = 0, gst = 0, tds = 0, vendor = 0, margin = 0, jobs = 0
     for (const e of entries) {
@@ -568,7 +570,8 @@ function DoneTab({ entries, fy, open, today }) {
       <div class="stat"><span>Your margin</span><strong>${fmt0(sum.margin)}</strong></div>
     </div>
     <div class="done-tools">
-      <button class="btn ghost grow" onClick=${() => exportExcel(entries)}>${Icon.sheet()} Download Excel</button>
+      ${sheetUrl && html`<a class="btn ghost grow" href=${sheetUrl} target="_blank" rel="noopener">${Icon.sheet()} Google Sheet</a>`}
+      <button class="btn ghost grow" onClick=${() => exportExcel(entries)}>${Icon.download()} Excel</button>
     </div>
 
     <div class="sec-head"><h2>Insights</h2><span>${fyLabel(fy)}</span></div>
@@ -910,6 +913,7 @@ function SettingsSheet({ close, back, open }) {
       ...f, categories,
       paymentTermsDays: num(f.paymentTermsDays) || 30, gstRate: num(f.gstRate), tdsRate: num(f.tdsRate), advancePct: num(f.advancePct),
       invoicePrefix: (f.invoicePrefix || 'INV').trim(),
+      sheetUrl: (f.sheetUrl || '').trim(),
     })
     toast('Settings saved')
     back ? open(back.type, { id: back.id }) : close()
@@ -973,6 +977,9 @@ function SettingsSheet({ close, back, open }) {
       <//>
 
       <h3 class="sub">Data</h3>
+      <${Field} label="Google Sheet link" hint="Paste the URL of the sheet Supabase syncs to. It shows as a button on the Done tab.">
+        <input type="url" value=${f.sheetUrl} onInput=${set('sheetUrl')} placeholder="https://docs.google.com/spreadsheets/d/…" />
+      <//>
       <div class="btn-row">
         <button type="button" class="btn ghost grow" onClick=${() => exportExcel(s.entries)}>Excel</button>
         <button type="button" class="btn ghost grow" onClick=${exportData}>Export backup</button>

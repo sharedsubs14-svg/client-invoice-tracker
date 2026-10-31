@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS = {
   business: { name: '', address: '', state: '', gstin: '', pan: '', email: '', phone: '' },
   bank: { accountName: '', bankName: '', accountNo: '', ifsc: '', upi: '' },
   invoicePrefix: 'INV',
+  sheetUrl: '', // Google Sheet that Supabase keeps in sync (docs/google-sheets-sync.md)
   paymentTermsDays: 30,
   gstRate: 18,
   tdsRate: 10,

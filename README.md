@@ -8,7 +8,7 @@ Every job moves through one pipeline:
 - **Quotes**: everyone you've quoted. Tap **Advance received** to start the work.
 - **Work**: jobs in progress. **Mark work done** pops up **Raise invoice**.
 - **Due**: raised invoices with a live day-by-day countdown (green → amber at 7 days → red when overdue), a WhatsApp reminder button and the PDF.
-- **Done**: FY summary (received, invoiced, GST collected, TDS deducted, vendor costs, margin), charts (monthly received/invoiced, top & repeat clients, category mix, pipeline, win rate, days to get paid), **Download Excel**, vendors still to pay, completed jobs.
+- **Done**: FY summary (received, invoiced, GST collected, TDS deducted, vendor costs, margin), charts (monthly received/invoiced, top & repeat clients, category mix, pipeline, win rate, days to get paid), **Excel** download and a **Google Sheet** button (live background sync, see `docs/google-sheets-sync.md`), vendors still to pay, completed jobs.
 - **Header counter**: money received this financial year (Apr–Mar) and pending receivables, with overdue amount.
 
 GST is added on top of the quote, and TDS is calculated on the pre-GST amount and treated as withheld by the client:
@@ -83,6 +83,8 @@ Then open <http://localhost:5173>.
 | `js/calc.js` | GST/TDS maths, Indian FY, dates, invoice numbering, amount in words |
 | `js/invoice.js` | GST invoice PDF (jsPDF) + share/download |
 | `js/excel.js` | Excel (.xlsx) export: Jobs, Payments, FY Summary (SheetJS) |
-| `docs/excel-sync-plan.md` | Plan for a live Excel backend |
+| `supabase/google-sheets-sync.sql` | Trigger that pushes every change to Google Sheets |
+| `google-sheets/Code.gs` | Apps Script that writes the Google Sheet |
+| `docs/google-sheets-sync.md` | Google Sheets sync setup guide |
 | `supabase/schema.sql` | Tables and Row Level Security policies |
 | `netlify.toml` | Static deploy config + headers |
